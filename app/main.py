@@ -44,6 +44,7 @@ def get_db():
 class Token(BaseModel):
     access_token: str
     token_type: str
+    realname: str
 
 
 class UserCreate(BaseModel):
@@ -52,6 +53,9 @@ class UserCreate(BaseModel):
     email: str
     password: str
 
+class UserLogin(BaseModel):
+    username: str
+    password: str
 
 
 @app.post("/signup", summary="now JSON !!!", tags=["users"])
@@ -65,7 +69,7 @@ async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
 
     hashed_password = security.hash_pass(user_data.password)
 
-    new_user = User(username=user_data.username, email=user_data.email, hashed_password=hashed_password)
+    new_user = User(username=user_data.username, email=user_data.email, hashed_password=hashed_password, realname=user_data.realname)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -73,18 +77,25 @@ async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/login", response_model=Token, tags=["users"])
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: SessionLocal = Depends(get_db)):
-    user = db.query(User).filter(User.username == form_data.username).first()
+async def login(login_data: UserLogin, db: Session = Depends(get_db)):
 
-    if not user or not security.verify_password(form_data.password, user.hashed_password):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="password or login is wrong! ",
-                            headers={"WWW-Authenticate": "Bearer"})
+    user = db.query(User).filter(User.username == login_data.username).first()
+
+    if not user or not security.verify_pass(login_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="password or login is wrong!",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
 
     access_token_expires = timedelta(minutes=security.ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = security.create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
+    access_token = security.create_token(data={"sub": user.username}, expires_delta=access_token_expires)
 
-    return {"access_token": access_token, "token_type": "bearer"}
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "realname": user.realname
+    }
 
 @app.get("/profile", deprecated=True, tags=["users"])
 async def profile(username: str, db: Session = Depends(get_db)):
@@ -136,3 +147,24 @@ async def code404(request: Request, exc: StarletteHTTPException):
 
 
 
+# Печеньки
+# @app.get("/t")
+# def root(response: Response):
+#     now = datetime.now()
+#     response.set_cookie(key="last_visit", value=now)
+#     return  {"message": "cookie setted"}
+
+
+#
+# данные пользователя выгружаются на бекенд через websocket
+# в любой момент к комнате пользователя может подключиться медбрат и просматреть данные пользователя
+
+
+#РЕГА
+# реальное имя
+# отображаемое имя
+# почта
+# пароль
+
+# иметь аккаунт пользователя
+# сохранять анализы в базе данных
