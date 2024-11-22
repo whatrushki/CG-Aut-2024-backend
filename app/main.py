@@ -11,6 +11,7 @@ from datetime import timedelta
 import app.security as security
 import asyncio
 
+active_sessions: Dict[str, Dict[str, WebSocket]] = {}
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -41,6 +42,7 @@ def get_db():
     finally:
         db.close()
 
+
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -53,12 +55,13 @@ class UserCreate(BaseModel):
     email: str
     password: str
 
+
 class UserLogin(BaseModel):
     username: str
     password: str
 
 
-@app.post("/signup", summary="now JSON !!!", tags=["users"])
+@app.post("/signup", summary="Registration", tags=["users"])
 async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == user_data.username).first()
     em = db.query(User).filter(User.email == user_data.email).first()
@@ -97,22 +100,6 @@ async def login(login_data: UserLogin, db: Session = Depends(get_db)):
         "realname": user.realname
     }
 
-@app.get("/profile", deprecated=True, tags=["users"])
-async def profile(username: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=403, detail="we don't have any here! try registration or check /docs")
-    return {"username": user.username, "email": user.email}
-
-
-@app.get("/profile/{username}", tags=["users"])
-async def profile(username: str, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(status_code=403, detail="we don't have any here! try registration or check /docs")
-    return {"username": user.username, "email": user.email}
-
-
 @app.delete("/del", tags=["users"])
 async def delete_account(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
@@ -147,24 +134,55 @@ async def code404(request: Request, exc: StarletteHTTPException):
 
 
 
-# Печеньки
-# @app.get("/t")
-# def root(response: Response):
-#     now = datetime.now()
-#     response.set_cookie(key="last_visit", value=now)
-#     return  {"message": "cookie setted"}
+
+'''
+    websocket для обмена данными меджду пользователям и доктором
+    | 
+    |
+    V
+'''
+@app.websocket("/ws/{username}")
+async def user_session(username: str, websocket: WebSocket, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+        await websocket.close()
+
+    if username in active_sessions:
+        raise HTTPException(status_code=404, detail="user already exists")
+        await websocket.close()
 
 
-#
-# данные пользователя выгружаются на бекенд через websocket
-# в любой момент к комнате пользователя может подключиться медбрат и просматреть данные пользователя
+
+    await websocket.accept()
+    if username not in active_sessions:
+        active_sessions[username] = {"user": websocket, "doctor": None}
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+            if active_sessions[username]["doctor"]:
+                await active_sessions[username]["doctor"].send_json(data)
+    except WebSocketDisconnect:
+        del active_sessions[username]
 
 
-#РЕГА
-# реальное имя
-# отображаемое имя
-# почта
-# пароль
+@app.websocket("/ws/doctor/{username}")
+async def doctor_session(username: str, websocket: WebSocket):
+    if username not in active_sessions:
+        await websocket.close()
+        raise HTTPException(status_code=404, detail="no active session for this user")
 
-# иметь аккаунт пользователя
-# сохранять анализы в базе данных
+    await websocket.accept()
+    active_sessions[username]["doctor"] = websocket
+
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        active_sessions[username]["doctor"] = None
+
+
+@app.get("/activea", tags=["sessions"])
+async def list_active_sessions():
+    return {"active_sessions": list(active_sessions.keys())}
