@@ -2,7 +2,7 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect, Header
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.models import User, SessionLocal, init_db, Base
+from app.models import User, SessionLocal, init_db, Base, Data
 from typing import List, Dict
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -55,7 +55,7 @@ class Token(BaseModel):
     realname: str
 
 class DataTable(BaseModel):
-    strong_index: List[int]
+    strong_index: List[str]
     css: List[str]
 
 
@@ -206,3 +206,36 @@ async def doctor_session(username: str, websocket: WebSocket):
 @app.get("/activea", tags=["sessions"])
 async def active_ws():
     return {"active_sessions": list(active_sessions.keys())}
+
+
+@app.post("/result", tags=["history"])
+async def result(
+    data: DataTable,
+    db: Session = Depends(get_db),
+    token: str = Header(None, alias="Authorization")
+):
+    if not token or not token.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing or invalid token")
+    token_data = token.split("Bearer ")[1]
+    username = security.verify_token(token_data)
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    new_data = Data(
+        username=user.username,
+        realname=user.realname,
+        strong_index=data.strong_index,
+        css=data.css,
+    )
+    db.add(new_data)
+    db.commit()
+    db.refresh(new_data)
+
+    return {
+        "status_code": 200,
+        "message": "data saved successfully",
+        "id": new_data.id,
+    }
+
