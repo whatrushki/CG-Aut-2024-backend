@@ -1,5 +1,5 @@
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect, Header
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect, Header, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.models import User, SessionLocal, init_db, Base, Data
@@ -10,18 +10,17 @@ from pydantic import BaseModel
 from datetime import timedelta
 import app.security as security
 import asyncio
+import time
 
+rooms: Dict[str, List[WebSocket]] = {}
 
-active_sessions: Dict[str, Dict[str, WebSocket]] = {}
-
-templates = Jinja2Templates(directory="app/templates")
+templates = Jinja2Templates(directory="./templates")
 
 tags = [
     {
         "name": "users",
         "description": "Управление пользователями",
     },
-
     {
         "name": "sessions",
         "description": "Активные сессии",
@@ -40,7 +39,6 @@ app = FastAPI(
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 init_db()
 
-
 def get_db():
     db = SessionLocal()
     try:
@@ -49,15 +47,19 @@ def get_db():
         db.close()
 
 
+class ResultRequest(BaseModel):
+    access_token: str
+    limit: int
+    offset: int
+
 class Token(BaseModel):
     access_token: str
     token_type: str
     realname: str
 
 class DataTable(BaseModel):
-    strong_index: List[str]
-    css: List[str]
-
+    strong_index: List[float]
+    css: List[float]
 
 class UserCreate(BaseModel):
     realname: str
@@ -65,11 +67,9 @@ class UserCreate(BaseModel):
     email: str
     password: str
 
-
 class UserLogin(BaseModel):
     username: str
     password: str
-
 
 @app.post("/signup", summary="Registration", tags=["users"])
 async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
@@ -87,7 +87,6 @@ async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
     return {"status_code": 200, "message": ".·´¯`·.´¯`·.¸¸.·´¯`·.¸><(((º> "}
-
 
 @app.post("/login", response_model=Token, tags=["users"])
 async def login(login_data: UserLogin, db: Session = Depends(get_db)):
@@ -109,7 +108,6 @@ async def login(login_data: UserLogin, db: Session = Depends(get_db)):
         "realname": user.realname
     }
 
-
 @app.delete("/del", tags=["users"])
 async def delete_account(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
@@ -122,15 +120,13 @@ async def delete_account(username: str = Form(...), password: str = Form(...), d
     db.commit()
     return {"status_code": 200, "detail": "User deleted success (✖╭╮✖)"}
 
-
-
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def redir():
     return RedirectResponse("/home")
+
 @app.get("/home", response_class=HTMLResponse, include_in_schema=False)
 async def root(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-
 
 @app.exception_handler(StarletteHTTPException)
 async def code404(request: Request, exc: StarletteHTTPException):
@@ -143,7 +139,6 @@ async def code404(request: Request, exc: StarletteHTTPException):
         status_code=exc.status_code,
         content={"message": exc.detail},
     )
-
 
 async def authenticate_websocket(websocket: WebSocket, db: Session):
     token = websocket.headers.get("Authorization")
@@ -159,58 +154,51 @@ async def authenticate_websocket(websocket: WebSocket, db: Session):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         raise HTTPException(status_code=401, detail="invalid token")
 
-    return username
+    return username, user.realname
 
+@app.websocket("/ws/room/{room_id}")
+async def user_session(room_id: str, websocket: WebSocket, db: Session = Depends(get_db)):
+    username, realname = await authenticate_websocket(websocket, db)
 
-
-@app.websocket("/ws/{username}")
-async def user_session(username: str, websocket: WebSocket, db: Session = Depends(get_db)):
-    user_from_token = await authenticate_websocket(websocket, db)
-
-    if username != user_from_token:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        raise HTTPException(status_code=403, detail="token username mismatch")
-
-    if username in active_sessions:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        raise HTTPException(status_code=403, detail="user already has an active session")
+    if room_id not in rooms:
+        rooms[room_id] = []
 
     await websocket.accept()
-    active_sessions[username] = {"user": websocket, "doctor": None}
+    rooms[room_id].append(websocket)
+
+    for ws in rooms[room_id]:
+        if ws != websocket:
+            await ws.send_json({
+                "event": f"user {username} joined",
+            })
 
     try:
         while True:
             data = await websocket.receive_json()
-            if active_sessions[username]["doctor"]:
-                await active_sessions[username]["doctor"].send_json(data)
+
+            data["userdata"] = {
+                "username": username,
+            }
+            for ws in rooms[room_id]:
+                if ws != websocket:
+                    await ws.send_json(data)
     except WebSocketDisconnect:
-        del active_sessions[username]
-
-
-@app.websocket("/ws/doctor/{username}")
-async def doctor_session(username: str, websocket: WebSocket):
-    if username not in active_sessions:
-        await websocket.close()
-        raise HTTPException(status_code=404, detail="no active session for this user")
-
-    await websocket.accept()
-    active_sessions[username]["doctor"] = websocket
-
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except WebSocketDisconnect:
-        active_sessions[username]["doctor"] = None
+        rooms[room_id].remove(websocket)
+        for ws in rooms[room_id]:
+            await ws.send_json({
+                "event": f"user {username} left",
+            })
+        if not rooms[room_id]:
+            del rooms[room_id]
 
 
 @app.get("/activea", tags=["sessions"])
 async def active_ws():
-    return {"active_sessions": list(active_sessions.keys())}
+    return {"rooms": list(rooms.keys())}
 
 
 @app.post("/result", tags=["history"])
 async def result(data: DataTable, db: Session = Depends(get_db), token: str = Header(None, alias="Authorization")):
-
     if not token or not token.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     token_data = token.split("Bearer ")[1]
