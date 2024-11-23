@@ -1,5 +1,5 @@
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect, Header, Query, Body
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect, Header, Query
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.models import User, SessionLocal, init_db, Base, Data
@@ -47,6 +47,7 @@ def get_db():
         db.close()
 
 
+
 class ResultRequest(BaseModel):
     access_token: str
     limit: int
@@ -70,7 +71,6 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     username: str
     password: str
-
 @app.post("/signup", summary="Registration", tags=["users"])
 async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == user_data.username).first()
@@ -119,6 +119,22 @@ async def delete_account(username: str = Form(...), password: str = Form(...), d
     db.delete(user)
     db.commit()
     return {"status_code": 200, "detail": "User deleted success (✖╭╮✖)"}
+
+@app.get("/profile", tags=["users"])
+async def profile(data: dict = Body(...), db: Session = Depends(get_db)):
+    access_token = data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=400, detail="missing access token")
+
+    username = security.verify_token(access_token)
+    if not username:
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="user not found")
+
+    return {"realname": user.realname}
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def redir():
@@ -169,7 +185,8 @@ async def user_session(room_id: str, websocket: WebSocket, db: Session = Depends
     for ws in rooms[room_id]:
         if ws != websocket:
             await ws.send_json({
-                "event": f"user {username} joined",
+                "type": "JOIN",
+                "data": f"user {username} joined",
             })
 
     try:
@@ -177,7 +194,8 @@ async def user_session(room_id: str, websocket: WebSocket, db: Session = Depends
             data = await websocket.receive_json()
 
             data["userdata"] = {
-                "username": username,
+                "type": "ANALYZE",
+                "data": data,
             }
             for ws in rooms[room_id]:
                 if ws != websocket:
@@ -186,7 +204,8 @@ async def user_session(room_id: str, websocket: WebSocket, db: Session = Depends
         rooms[room_id].remove(websocket)
         for ws in rooms[room_id]:
             await ws.send_json({
-                "event": f"user {username} left",
+                "type": "LEAVE",
+                "data": f"user {username} left",
             })
         if not rooms[room_id]:
             del rooms[room_id]
