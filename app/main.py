@@ -209,11 +209,8 @@ async def active_ws():
 
 
 @app.post("/result", tags=["history"])
-async def result(
-    data: DataTable,
-    db: Session = Depends(get_db),
-    token: str = Header(None, alias="Authorization")
-):
+async def result(data: DataTable, db: Session = Depends(get_db), token: str = Header(None, alias="Authorization")):
+
     if not token or not token.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     token_data = token.split("Bearer ")[1]
@@ -238,4 +235,3 @@ async def result(
         "message": "data saved successfully",
         "id": new_data.id,
     }
-
