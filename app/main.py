@@ -1,8 +1,8 @@
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, status, Request, Form, WebSocket, WebSocketDisconnect, Header
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from app.models import User, SessionLocal, init_db
+from app.models import User, SessionLocal, init_db, Base
 from typing import List, Dict
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from datetime import timedelta
 import app.security as security
 import asyncio
+
 
 active_sessions: Dict[str, Dict[str, WebSocket]] = {}
 
@@ -19,6 +20,11 @@ tags = [
     {
         "name": "users",
         "description": "Управление пользователями",
+    },
+
+    {
+        "name": "sessions",
+        "description": "Активные сессии",
     },
 ]
 
@@ -48,6 +54,10 @@ class Token(BaseModel):
     token_type: str
     realname: str
 
+class DataTable(BaseModel):
+    strong_index: List[int]
+    css: List[str]
+
 
 class UserCreate(BaseModel):
     realname: str
@@ -68,7 +78,7 @@ async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     if user:
         raise HTTPException(status_code=400, detail="there is already such a user! try another username ( ͡° ͜ʖ ͡°)")
     if em:
-        raise HTTPException(status_code=400, detail="there is already such a email! try another email ( ͡° ͜ʖ ͡°)")
+        raise HTTPException(status_code=400, detail="there is already such an email! try another email ( ͡° ͜ʖ ͡°)")
 
     hashed_password = security.hash_pass(user_data.password)
 
@@ -81,7 +91,6 @@ async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/login", response_model=Token, tags=["users"])
 async def login(login_data: UserLogin, db: Session = Depends(get_db)):
-
     user = db.query(User).filter(User.username == login_data.username).first()
 
     if not user or not security.verify_pass(login_data.password, user.hashed_password):
@@ -100,17 +109,20 @@ async def login(login_data: UserLogin, db: Session = Depends(get_db)):
         "realname": user.realname
     }
 
+
 @app.delete("/del", tags=["users"])
 async def delete_account(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=418, detail="we don't have any here! try registration or check /docs")
 
-    if not security.verify_password(password, user.hashed_password):
+    if not security.verify_pass(password, user.hashed_password):
         raise HTTPException(status_code=403, detail="password is wrong!")
     db.delete(user)
     db.commit()
     return {"status_code": 200, "detail": "User deleted success (✖╭╮✖)"}
+
+
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def redir():
@@ -133,30 +145,38 @@ async def code404(request: Request, exc: StarletteHTTPException):
     )
 
 
+async def authenticate_websocket(websocket: WebSocket, db: Session):
+    token = websocket.headers.get("Authorization")
+    if not token or not token.startswith("Bearer "):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=401, detail="missing or invalid token")
 
+    token_data = token.split("Bearer ")[1]
+    username = security.verify_token(token_data)
 
-'''
-    websocket для обмена данными меджду пользователям и доктором
-    | 
-    |
-    V
-'''
-@app.websocket("/ws/{username}")
-async def user_session(username: str, websocket: WebSocket, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
     if not user:
-        raise HTTPException(status_code=404, detail="user not found")
-        await websocket.close()
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=401, detail="invalid token")
+
+    return username
+
+
+
+@app.websocket("/ws/{username}")
+async def user_session(username: str, websocket: WebSocket, db: Session = Depends(get_db)):
+    user_from_token = await authenticate_websocket(websocket, db)
+
+    if username != user_from_token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=403, detail="token username mismatch")
 
     if username in active_sessions:
-        raise HTTPException(status_code=404, detail="user already exists")
-        await websocket.close()
-
-
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        raise HTTPException(status_code=403, detail="user already has an active session")
 
     await websocket.accept()
-    if username not in active_sessions:
-        active_sessions[username] = {"user": websocket, "doctor": None}
+    active_sessions[username] = {"user": websocket, "doctor": None}
 
     try:
         while True:
@@ -184,5 +204,5 @@ async def doctor_session(username: str, websocket: WebSocket):
 
 
 @app.get("/activea", tags=["sessions"])
-async def list_active_sessions():
+async def active_ws():
     return {"active_sessions": list(active_sessions.keys())}

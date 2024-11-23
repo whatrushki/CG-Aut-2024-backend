@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
@@ -24,8 +24,10 @@ class Data(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
+    realname = Column(String, index=True)
     date = Column(DateTime, default=datetime.utcnow)
-
+    strong_index = Column(JSON)
+    css = Column(JSON)
 
 
 

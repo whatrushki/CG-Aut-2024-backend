@@ -6,7 +6,7 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET_KEY = "o7wELp+wMruYwOFbQq7HZNCRrA9bW7t3BNLrkpiiZTASyvBKLVLvAX04vr6VsOri"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+ACCESS_TOKEN_EXPIRE_MINUTES = 52650000
 
 
 def hash_pass(password: str) -> str:
@@ -35,3 +35,13 @@ def decode(token: str):
         return payload
     except JWTError:
         raise credentials_exception
+
+def verify_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise JWTError("invalid token: subject missing")
+        return username
+    except JWTError as e:
+        raise JWTError(f"token verification failed: {str(e)}")
