@@ -120,17 +120,16 @@ async def delete_account(username: str = Form(...), password: str = Form(...), d
     db.commit()
     return {"status_code": 200, "detail": "User deleted success (✖╭╮✖)"}
 
+
 @app.get("/profile", tags=["users"])
-async def profile(data: dict = Body(...), db: Session = Depends(get_db)):
-    access_token = data.get("access_token")
+async def profile(access_token: str = Header(...)):
     if not access_token:
-        raise HTTPException(status_code=400, detail="missing access token")
+        raise HTTPException(status_code=401, detail="missing access token")
 
     username = security.verify_token(access_token)
-    if not username:
-        raise HTTPException(status_code=401, detail="invalid token")
-
+    db = SessionLocal()
     user = db.query(User).filter(User.username == username).first()
+
     if not user:
         raise HTTPException(status_code=404, detail="user not found")
 
