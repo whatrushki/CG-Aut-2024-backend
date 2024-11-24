@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import timedelta
 import app.security as security
+from datetime import datetime
 import asyncio
 import time
 
@@ -216,16 +217,18 @@ async def active_ws():
 
 
 @app.post("/result", tags=["history"])
-async def result(data: DataTable, db: Session = Depends(get_db), token: str = Header(None, alias="Authorization")):
+async def result(
+    data: DataTable,
+    db: Session = Depends(get_db),
+    token: str = Header(None, alias="Authorization")
+):
     if not token or not token.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="missing or invalid token")
     token_data = token.split("Bearer ")[1]
     username = security.verify_token(token_data)
-
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="invalid token")
-
     new_data = Data(
         username=user.username,
         realname=user.realname,
@@ -235,9 +238,51 @@ async def result(data: DataTable, db: Session = Depends(get_db), token: str = He
     db.add(new_data)
     db.commit()
     db.refresh(new_data)
-
     return {
         "status_code": 200,
         "message": "data saved successfully",
         "id": new_data.id,
     }
+
+
+@app.get("/result", tags=["history"])
+async def get_results(
+    access_token: str = Header(...),
+    limit: int = Header(...),
+    offset: int = Header(...),
+    db: Session = Depends(get_db)
+):
+
+    if not access_token:
+        raise HTTPException(status_code=401, detail="missing access token")
+
+
+    username = security.verify_token(access_token)
+
+
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="invalid token")
+
+
+    results = (
+        db.query(Data)
+        .filter(Data.username == username)
+        .order_by(Data.id.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+    response = [
+        {
+            "id": result.id,
+            "date": result.date.strftime("%Y-%m-%d %H:%M") if result.date else None,
+            "strong_index": result.strong_index,
+            "css": result.css,
+        }
+        for result in results
+    ]
+
+    return {"status_code": 200, "data": response}

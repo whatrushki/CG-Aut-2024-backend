@@ -23,7 +23,7 @@ class Data(Base):
     __tablename__ = "data"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
+    username = Column(String, index=True)
     realname = Column(String, index=True)
     date = Column(DateTime, default=datetime.utcnow)
     strong_index = Column(JSON)
