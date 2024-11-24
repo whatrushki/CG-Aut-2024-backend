@@ -216,7 +216,7 @@ async def active_ws():
     return {"rooms": list(rooms.keys())}
 
 
-@app.post("/result", tags=["history"])
+@app.post("/result", description="need 'Bearer' before access_token in header", tags=["history"])
 async def result(
     data: DataTable,
     db: Session = Depends(get_db),
