@@ -192,7 +192,6 @@ async def user_session(room_id: str, websocket: WebSocket, db: Session = Depends
     try:
         while True:
             data = await websocket.receive_json()
-
             data["userdata"] = {
                 "type": "ANALYZE",
                 "data": data,
